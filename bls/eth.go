@@ -1,4 +1,5 @@
 package bls
+
 /*
 #cgo CFLAGS:-I${SRCDIR}./include -DBLS_ETH
 #include <mcl/bn_c384_256.h>
@@ -182,4 +183,23 @@ func (sig *Sign) AggregateVerifyNoCheck(pubVec []PublicKey, msgVec []byte) bool 
 // check all msgs are different each other
 func (sig *Sign) AggregateVerify(pubVec []PublicKey, msgVec []byte) bool {
 	return sig.innerAggregateVerify(pubVec, msgVec, true)
+}
+
+// The following seutp functions are for Harmony.ONE
+/*
+	Init(BLS12_381)
+	SetETHserialization(false)
+	SetMapToMode(MapToModeOriginal)
+*/
+func SetETHserialization(b bool) {
+	C.blsSetETHserialization(C.int(b))
+}
+
+const MapToModeOriginal = C.MAP_TO_MODE_ORIGINAL
+
+func SetMapToMode(mode int) error {
+	if C.blsSetMapToMode(C.int(mode)) != 0 {
+		return fmt.Errorf("blsSetMapToMode")
+	}
+	return nil
 }
