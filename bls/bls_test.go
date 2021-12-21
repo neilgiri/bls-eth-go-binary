@@ -371,6 +371,21 @@ func ethFastAggregateVerifyTest(t *testing.T) {
 	}
 }
 
+type QC struct {
+	Type string
+	ViewNumber int
+	Block []byte
+	PKs []PublicKey
+	Sig Sign
+}
+
+type AggQC struct {
+	QCset []QC
+	View int
+	Sig Sign
+	PKs []PublicKey
+}
+
 func makeMultiSig(n int) (pubs []PublicKey, sigs []Sign, msgs []byte) {
 	msgSize := 32
 	pubs = make([]PublicKey, n)
@@ -385,6 +400,80 @@ func makeMultiSig(n int) (pubs []PublicKey, sigs []Sign, msgs []byte) {
 	}
 	return pubs, sigs, msgs
 }
+
+func makeQCs(n int) []QC {
+	msgSize := 32
+	qcSet := make([]QC, n)
+	var qc QC
+
+	for i := 0; i < 1; i++ {
+		token := make([]byte, msgSize)
+    		rand.Read(token)
+		pubs := make([]PublicKey, n)
+		sigs := make([]Sign, n)
+		//msg := sha256.Sum256(token)
+
+		for j := 0; j < n; j++ {
+			var sec SecretKey
+			sec.SetByCSPRNG()
+			pubs[j] = *sec.GetPublicKey()
+			sigs[j] = *sec.SignByte(token)
+		}
+
+		var multiSig Sign
+		multiSig.Aggregate(sigs)
+		qc = QC{"", 1, token, pubs, multiSig}
+	}
+
+	for i := 0; i < n; i++ {
+		qcSet[i] = qc
+	}
+
+	return qcSet
+}
+
+func makeAggQC(qcSet []QC) AggQC {
+	var aggSig Sign
+	sigs := make([]Sign, len(qcSet))
+	pks := make([]PublicKey, len(qcSet))
+
+	for i := 0; i < len(qcSet); i++ {
+		var sec SecretKey
+		sec.SetByCSPRNG()
+		pk := *sec.GetPublicKey()
+
+		block := qcSet[i].Block
+		block[31] = byte(i)
+
+		sigs[i] = *sec.SignByte(block)
+		pks[i] = pk
+	}
+	aggSig.Aggregate(sigs)
+	return AggQC{qcSet, 1, aggSig, pks}
+}
+
+func verifyAggQC(aggQC AggQC) bool {
+	msgSize := 32
+	highQC := aggQC.QCset[0]
+	msgVec := make([]byte, msgSize*len(aggQC.PKs))
+	for i := 0; i < len(aggQC.QCset); i++ {
+		if aggQC.QCset[i].ViewNumber > highQC.ViewNumber {
+			highQC = aggQC.QCset[i]
+		}
+
+		block := aggQC.QCset[i].Block
+		block[31] = byte(i)
+
+		for j := 0; j < msgSize; j++ {
+			msgVec[i*msgSize+j] = block[j]
+		}
+	}
+
+	return aggQC.Sig.AggregateVerifyNoCheck(aggQC.PKs, msgVec) && highQC.Sig.FastAggregateVerify(highQC.PKs, highQC.Block)
+}
+
+
+
 
 func blsAggregateVerifyNoCheckTestOne(t *testing.T, n int) {
 	t.Logf("blsAggregateVerifyNoCheckTestOne %v\n", n)
@@ -713,5 +802,16 @@ func BenchmarkMultiVerify(b *testing.B) {
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		MultiVerify(sigs, pubs, msgs)
+	}
+}
+
+func BenchmarkAggQCVerify(b *testing.B) {
+	b.StopTimer()
+	//pubs, sigs, msgs := makeMultiSig(400)
+	qcSet := makeQCs(1000)
+	aggQC := makeAggQC(qcSet)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		verifyAggQC(aggQC)
 	}
 }
