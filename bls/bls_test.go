@@ -5,13 +5,14 @@ import (
 	"encoding/binary"
 	"encoding/csv"
 	"encoding/hex"
+	//"fmt"
+	"math"
 
 	"io"
 	"io/ioutil"
 	"os"
-	"testing"
 	"strconv"
-	"github.com/RoaringBitmap/roaring"
+	"testing"
 )
 
 func testUncompressedG1(t *testing.T, gen1 *G1) {
@@ -408,30 +409,41 @@ func (AS *AggregateSignature) KGen(sk *SecretKey, pk *PublicKey, pop *Sign) {
 }
 
 // SignShare generates a partial signature
-func (AS *AggregateSignature) SignShare(sk [][]SecretKey, c roaring.Bitmap, v []byte) Sign {
+func (AS *AggregateSignature) SignShare(sk [][]SecretKey, c string, v []byte) Sign {
 	var secretKey SecretKey
-	for i := 0; i < len(sk); i++ {
-		bitSetVar := int8(0)
-		if c.Contains(uint32(i)) {
+	bits := []rune(c)
+	j := 0
+	for i := len(bits) - 1; i >= 0; i-- {
+		bitSetVar := 0
+		if string(bits[i]) == "1" {
 			bitSetVar = 1
 		}
-		secretKey.Add(&sk[i][bitSetVar])
+		secretKey.Add(&sk[j][bitSetVar])
+		//fmt.Println("S" + strconv.Itoa(j) + strconv.Itoa(bitSetVar))
+		//fmt.Println("S")
+		//fmt.Println(sk[j][bitSetVar].GetPublicKey())
+
+		j++
 	}
 
 	return *secretKey.SignByte(v)
 }
 
 // VerifyShare verifies a partial signature
-func (AS *AggregateSignature) VerifyShare(pk [][]PublicKey, c roaring.Bitmap, v []byte, sig Sign) bool {
-	publicKeys := make([]PublicKey, len(pk))
-	for i := 0; i < len(pk); i++ {
+func (AS *AggregateSignature) VerifyShare(pk [][]PublicKey, c string, v []byte, sig Sign) bool {
+	bits := []rune(c)
+	j := 0
+	publicKeys := make([]PublicKey, len(bits))
+
+	for i := len(bits) - 1; i >= 0; i-- {
 		bitSetVar := int8(0)
-		if c.Contains(uint32(i)) {
+		if string(bits[i]) == "1" {
 			bitSetVar = 1
 		}
-		publicKeys[i] = pk[i][bitSetVar]
-
+		publicKeys[j] = pk[j][bitSetVar]
+		j++
 	}
+
 	return sig.FastAggregateVerify(publicKeys, v)
 }
 
@@ -443,17 +455,34 @@ func (AS *AggregateSignature) Agg(sigs []Sign) Sign {
 }
 
 // VerifyAgg aggregates signatures
-func (AS *AggregateSignature) VerifyAgg(pk [][]PublicKey, c []roaring.Bitmap, v []byte, sig Sign) bool {
-	publicKeys := make([]PublicKey, len(pk)*len(c))
-	for i := 0; i < len(c); i++ {
-		for j := 0; j < len(pk); j++ {
-			bitSetVar := int8(0)
-			if c[i].Contains(uint32(j)) {
+func (AS *AggregateSignature) VerifyAgg(pk [][][]PublicKey, c []string, v []byte, sig Sign) bool {
+	publicKeys := make([]PublicKey, len(c))
+	//index := 0
+
+	for k := 0; k < len(c); k++ {
+		bits := []rune(c[k])
+		j := 0
+
+		pub := publicKeys[k]
+		for i := len(bits) - 1; i >= 0; i-- {
+			bitSetVar := 0
+			if string(bits[i]) == "1" {
 				bitSetVar = 1
 			}
-			publicKeys[i*len(pk)+j] = pk[j][bitSetVar]
+			//publicKeys[index] = pk[k][j][bitSetVar]
+			pub.Add(&pk[k][j][bitSetVar])
+			//fmt.Println("V" + strconv.Itoa(j) + strconv.Itoa(bitSetVar))
+			//fmt.Println("V")
+			//fmt.Println(publicKeys[index])
+			//fmt.Println(pk[k][j][bitSetVar])
+
+			//index++
+			j++
 		}
+
+		publicKeys[k] = pub
 	}
+
 	return sig.FastAggregateVerify(publicKeys, v)
 }
 
@@ -542,7 +571,7 @@ func makeQCs(f int, viewDifference int, secrets []SecretKey, pubs []PublicKey) [
     		rand.Read(token)
 
 		multiSig := secretKey.SignByte(token)
-		qcViews[i] = QC{"", viewDifference+1, token, pubs, *multiSig}
+		qcViews[i] = QC{"", i, token, pubs, *multiSig}
 	}
 
 	for i := 0; i < n; i++ {
@@ -584,21 +613,60 @@ func makeAggQC(qcSet []QC) AggQC {
 	return AggQC{qcSet, 1, aggSig, pks}
 }
 
-func makeQuorumProof(qcSet []QC, pks [][]PublicKey) {
-	pkBitmaps := make([]roaring.Bitmap, len(qcSet))
-	for i := 0; i < len(qcSet); i++ {
-		bitmap := roaring.New()
-		viewDiff := qcSet[i].ViewNumber
-		bits := strconv.FormatInt(int64(viewDiff), 2)
-		for k, letter := range bits {
-			if string(letter) == "1" {
-				bitmap.Add(uint32(k))
+func makeWendyKeys(f int, viewDifference int) ([][][]SecretKey, [][][]PublicKey) {
+	n := 2*f+1
+	numKeys := int(math.Log2(float64(viewDifference)))
+	sks := make([][][]SecretKey, n)
+	pks := make([][][]PublicKey, n)
+
+	for i := 0; i < n; i++ {
+		sks[i] = make([][]SecretKey, numKeys)
+		pks[i] = make([][]PublicKey, numKeys)
+		for j := 0; j < numKeys; j++ {
+			sks[i][j] = make([]SecretKey, 2)
+			pks[i][j] = make([]PublicKey, 2)
+			for k := 0; k < 2; k++ {
+				var sec SecretKey
+				sec.SetByCSPRNG()
+				pk := *sec.GetPublicKey()
+				sks[i][j][k] = sec
+				pks[i][j][k] = pk
 			}
 		}
-
-		pkBitmaps[i] = *bitmap
 	}
+
+	return sks, pks
 }
+
+
+func makeWendyProof(qcSet []QC, secrets [][][]SecretKey, pubs [][][]PublicKey) (Sign, []string, []byte) {
+	pkBitmaps := make([]string, len(qcSet))
+	signShares := make([]Sign, len(qcSet))
+
+	AS := AggregateSignature{}
+	currView := make([]byte, 4)
+    	binary.LittleEndian.PutUint32(currView, uint32(1000))
+
+
+	for i := 0; i < len(qcSet); i++ {
+		viewDiff := qcSet[i].ViewNumber
+		bits := strconv.FormatInt(int64(viewDiff), 2)
+		pkBitmaps[i] = bits
+		signShares[i] = AS.SignShare(secrets[i], bits, currView)
+	}
+
+	//fmt.Println("Make")
+	//fmt.Println(pkBitmaps)
+	return AS.Agg(signShares), pkBitmaps, currView
+}
+
+func verifyWendyProof(pk [][][]PublicKey, aggSig Sign, bitmaps []string, view []byte) bool {
+	AS := AggregateSignature{}
+	//fmt.Println("Verify")
+	//fmt.Println(bitmaps)
+	return AS.VerifyAgg(pk, bitmaps, view, aggSig)
+}
+
 
 func verifyAggQC(aggQC AggQC) bool {
 	msgSize := 32
@@ -975,5 +1043,25 @@ func BenchmarkAggQCVerify(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkWendyProofVerify(b *testing.B) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	viewDifference := 1024
+	f := 3333
+	secrets, pubs := makeKeys(f)
+	qcSet := makeQCs(f, viewDifference, secrets, pubs)
+
+	sks, pks := makeWendyKeys(f, viewDifference)
+	wendyProof, bitmaps, commonView := makeWendyProof(qcSet, sks, pks)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		if !verifyWendyProof(pks, wendyProof, bitmaps, commonView) {
+			b.Fatal("Failed verification")
+		}
+	}
+}
+
 
 
