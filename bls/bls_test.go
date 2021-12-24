@@ -2,12 +2,16 @@ package bls
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/hex"
+
 	"io"
 	"io/ioutil"
 	"os"
 	"testing"
+	"strconv"
+	"github.com/RoaringBitmap/roaring"
 )
 
 func testUncompressedG1(t *testing.T, gen1 *G1) {
@@ -379,11 +383,78 @@ type QC struct {
 	Sig Sign
 }
 
+type Vote struct {
+	ViewNumber int
+	Block []byte
+	PKs []PublicKey
+	Sig Sign
+}
+
 type AggQC struct {
 	QCset []QC
 	View int
 	Sig Sign
 	PKs []PublicKey
+}
+
+type AggregateSignature struct {
+}
+
+// KGen gets secret keys
+func (AS *AggregateSignature) KGen(sk *SecretKey, pk *PublicKey, pop *Sign) {
+	sk.SetByCSPRNG()
+	*pk = *sk.GetPublicKey()
+	*pop = *sk.GetPop()
+}
+
+// SignShare generates a partial signature
+func (AS *AggregateSignature) SignShare(sk [][]SecretKey, c roaring.Bitmap, v []byte) Sign {
+	var secretKey SecretKey
+	for i := 0; i < len(sk); i++ {
+		bitSetVar := int8(0)
+		if c.Contains(uint32(i)) {
+			bitSetVar = 1
+		}
+		secretKey.Add(&sk[i][bitSetVar])
+	}
+
+	return *secretKey.SignByte(v)
+}
+
+// VerifyShare verifies a partial signature
+func (AS *AggregateSignature) VerifyShare(pk [][]PublicKey, c roaring.Bitmap, v []byte, sig Sign) bool {
+	publicKeys := make([]PublicKey, len(pk))
+	for i := 0; i < len(pk); i++ {
+		bitSetVar := int8(0)
+		if c.Contains(uint32(i)) {
+			bitSetVar = 1
+		}
+		publicKeys[i] = pk[i][bitSetVar]
+
+	}
+	return sig.FastAggregateVerify(publicKeys, v)
+}
+
+// Agg aggregates signatures
+func (AS *AggregateSignature) Agg(sigs []Sign) Sign {
+	var agg Sign
+	agg.Aggregate(sigs)
+	return agg
+}
+
+// VerifyAgg aggregates signatures
+func (AS *AggregateSignature) VerifyAgg(pk [][]PublicKey, c []roaring.Bitmap, v []byte, sig Sign) bool {
+	publicKeys := make([]PublicKey, len(pk)*len(c))
+	for i := 0; i < len(c); i++ {
+		for j := 0; j < len(pk); j++ {
+			bitSetVar := int8(0)
+			if c[i].Contains(uint32(j)) {
+				bitSetVar = 1
+			}
+			publicKeys[i*len(pk)+j] = pk[j][bitSetVar]
+		}
+	}
+	return sig.FastAggregateVerify(publicKeys, v)
 }
 
 func makeMultiSig(n int) (pubs []PublicKey, sigs []Sign, msgs []byte) {
@@ -401,17 +472,38 @@ func makeMultiSig(n int) (pubs []PublicKey, sigs []Sign, msgs []byte) {
 	return pubs, sigs, msgs
 }
 
-func makeQCs(n int) []QC {
-	msgSize := 32
-	qcSet := make([]QC, n)
-	var qc QC
+func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey) {
+	n := 2*f+1
+	secrets = make([]SecretKey, n)
+	pubs = make([]PublicKey, n)
 
-	for i := 0; i < 1; i++ {
+	for i := 0; i < n; i++ {
+		var sec SecretKey
+		sec.SetByCSPRNG()
+		secrets[i] = sec
+		pubs[i] = *sec.GetPublicKey()
+	}
+
+	return secrets, pubs
+}
+
+func makeVotes(n int) []Vote {
+	/*msgSize := 32
+	voteSet := make([]Vote, n)
+	var vote Vote
+
+	for i := 0; i < n; i++ {
 		token := make([]byte, msgSize)
     		rand.Read(token)
 		pubs := make([]PublicKey, n)
 		sigs := make([]Sign, n)
 		//msg := sha256.Sum256(token)
+		var sec SecretKey
+		sec.SetByCSPRNG()
+		pubs[j] = *sec.GetPublicKey()
+		sigs[j] = *sec.SignByte(token)
+
+
 
 		for j := 0; j < n; j++ {
 			var sec SecretKey
@@ -420,8 +512,8 @@ func makeQCs(n int) []QC {
 			sigs[j] = *sec.SignByte(token)
 		}
 
-		var multiSig Sign
-		multiSig.Aggregate(sigs)
+		var sig Sign
+		sig = *sec.SignByte(token)
 		qc = QC{"", 1, token, pubs, multiSig}
 	}
 
@@ -429,13 +521,43 @@ func makeQCs(n int) []QC {
 		qcSet[i] = qc
 	}
 
+	return qcSet*/
+	return nil
+}
+
+
+func makeQCs(f int, viewDifference int, secrets []SecretKey, pubs []PublicKey) []QC {
+	n := 2*f+1
+	msgSize := 32
+	qcSet := make([]QC, n)
+	qcViews := make([]QC, viewDifference)
+	
+	secretKey := secrets[0]
+	for j := 1; j < n; j++ {
+		secretKey.Add(&secrets[j])
+	}
+
+	for i := 0; i < viewDifference; i++ {
+		token := make([]byte, msgSize)
+    		rand.Read(token)
+
+		multiSig := secretKey.SignByte(token)
+		qcViews[i] = QC{"", viewDifference+1, token, pubs, *multiSig}
+	}
+
+	for i := 0; i < n; i++ {
+		qcSet[i] = qcViews[i%viewDifference]
+	}
+
 	return qcSet
 }
 
 func makeAggQC(qcSet []QC) AggQC {
+	msgSize := 32
 	var aggSig Sign
 	sigs := make([]Sign, len(qcSet))
 	pks := make([]PublicKey, len(qcSet))
+	aggMessage := make([]byte, msgSize)
 
 	for i := 0; i < len(qcSet); i++ {
 		var sec SecretKey
@@ -443,18 +565,45 @@ func makeAggQC(qcSet []QC) AggQC {
 		pk := *sec.GetPublicKey()
 
 		block := qcSet[i].Block
-		block[31] = byte(i)
 
-		sigs[i] = *sec.SignByte(block)
+		id := make([]byte, 4)
+    		binary.LittleEndian.PutUint32(id, uint32(i))
+
+		for j := 0; j < msgSize; j++ {
+			if j > 3 {
+				aggMessage[j] = block[j]
+			} else {
+				aggMessage[j] = id[j]
+			}
+		}
+
+		sigs[i] = *sec.SignByte(aggMessage)
 		pks[i] = pk
 	}
 	aggSig.Aggregate(sigs)
 	return AggQC{qcSet, 1, aggSig, pks}
 }
 
+func makeQuorumProof(qcSet []QC, pks [][]PublicKey) {
+	pkBitmaps := make([]roaring.Bitmap, len(qcSet))
+	for i := 0; i < len(qcSet); i++ {
+		bitmap := roaring.New()
+		viewDiff := qcSet[i].ViewNumber
+		bits := strconv.FormatInt(int64(viewDiff), 2)
+		for k, letter := range bits {
+			if string(letter) == "1" {
+				bitmap.Add(uint32(k))
+			}
+		}
+
+		pkBitmaps[i] = *bitmap
+	}
+}
+
 func verifyAggQC(aggQC AggQC) bool {
 	msgSize := 32
 	highQC := aggQC.QCset[0]
+
 	msgVec := make([]byte, msgSize*len(aggQC.PKs))
 	for i := 0; i < len(aggQC.QCset); i++ {
 		if aggQC.QCset[i].ViewNumber > highQC.ViewNumber {
@@ -462,10 +611,16 @@ func verifyAggQC(aggQC AggQC) bool {
 		}
 
 		block := aggQC.QCset[i].Block
-		block[31] = byte(i)
+
+		id := make([]byte, 4)
+    		binary.LittleEndian.PutUint32(id, uint32(i))
 
 		for j := 0; j < msgSize; j++ {
-			msgVec[i*msgSize+j] = block[j]
+			if j > 3 {
+				msgVec[i*msgSize+j] = block[j]
+			} else {
+				msgVec[i*msgSize+j] = id[j]
+			}
 		}
 	}
 
@@ -807,11 +962,18 @@ func BenchmarkMultiVerify(b *testing.B) {
 
 func BenchmarkAggQCVerify(b *testing.B) {
 	b.StopTimer()
-	//pubs, sigs, msgs := makeMultiSig(400)
-	qcSet := makeQCs(1000)
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	f := 3333
+	secrets, pubs := makeKeys(f)
+	qcSet := makeQCs(f, f, secrets, pubs)
 	aggQC := makeAggQC(qcSet)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		verifyAggQC(aggQC)
+		if !verifyAggQC(aggQC) {
+			b.Fatal("Failed verification")
+		}
 	}
 }
+
+
