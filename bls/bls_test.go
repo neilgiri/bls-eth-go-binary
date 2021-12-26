@@ -13,6 +13,8 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	//"sync"
+	//"sync/atomic"
 )
 
 func testUncompressedG1(t *testing.T, gen1 *G1) {
@@ -387,7 +389,7 @@ type QC struct {
 type Vote struct {
 	ViewNumber int
 	Block []byte
-	PKs []PublicKey
+	PK PublicKey
 	Sig Sign
 }
 
@@ -516,42 +518,45 @@ func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey) {
 	return secrets, pubs
 }
 
-func makeVotes(n int) []Vote {
-	/*msgSize := 32
+func makeThresholdKeys(f int) (identifiers []ID, secrets []SecretKey, masterPubKey PublicKey) {
+	k := 2*f+1
+	n := 3*f+1
+	ids := make([]ID, n)
+	sks := make([]SecretKey, n)
+	//pks := make([]PublicKey, n)
+
+	var secretKey SecretKey
+	secretKey.SetByCSPRNG()
+	
+	msk := secretKey.GetMasterSecretKey(k)
+
+	for i := 0; i < n; i++ {
+		ids[i].SetLittleEndian([]byte{byte(i & 255), byte(i >> 8), 2, 3, 4, 5})
+
+		sks[i].Set(msk, &ids[i])
+		//pks[i].Set(mpk, &ids[i])
+	}
+
+	secretKey.Recover(msk, ids)
+	mpk := secretKey.GetPublicKey()
+	return ids, sks, *mpk
+}
+
+func makeVotes(f int, viewDifference int, sks []SecretKey, pks []PublicKey) []Vote {
+	n := 2*f+1
+	msgSize := 32
 	voteSet := make([]Vote, n)
-	var vote Vote
 
 	for i := 0; i < n; i++ {
 		token := make([]byte, msgSize)
     		rand.Read(token)
-		pubs := make([]PublicKey, n)
-		sigs := make([]Sign, n)
-		//msg := sha256.Sum256(token)
-		var sec SecretKey
-		sec.SetByCSPRNG()
-		pubs[j] = *sec.GetPublicKey()
-		sigs[j] = *sec.SignByte(token)
 
-
-
-		for j := 0; j < n; j++ {
-			var sec SecretKey
-			sec.SetByCSPRNG()
-			pubs[j] = *sec.GetPublicKey()
-			sigs[j] = *sec.SignByte(token)
-		}
-
-		var sig Sign
-		sig = *sec.SignByte(token)
-		qc = QC{"", 1, token, pubs, multiSig}
+		sig := *sks[i].SignByte(token)
+		vote := Vote{i%viewDifference, token, pks[i], sig}
+		voteSet[i] = vote
 	}
 
-	for i := 0; i < n; i++ {
-		qcSet[i] = qc
-	}
-
-	return qcSet*/
-	return nil
+	return voteSet
 }
 
 
@@ -581,12 +586,62 @@ func makeQCs(f int, viewDifference int, secrets []SecretKey, pubs []PublicKey) [
 	return qcSet
 }
 
-func makeAggQC(qcSet []QC) AggQC {
+func makeThresholdQCs(f int, viewDifference int, ids []ID, secrets []SecretKey) []QC {
+	k := 2*f+1
+	msgSize := 32
+	qcSet := make([]QC, k)
+	qcViews := make([]QC, viewDifference)
+	
+	var msk SecretKey
+	msk.Recover(secrets, ids)
+
+	for i := 0; i < viewDifference; i++ {
+		token := make([]byte, msgSize)
+    		rand.Read(token)
+
+		thresholdSig := msk.SignByte(token)
+		qcViews[i] = QC{"", i, token, nil, *thresholdSig}
+	}
+
+	for i := 0; i < k; i++ {
+		qcSet[i] = qcViews[i%viewDifference]
+	}
+
+	return qcSet
+}
+
+func verifyThresholdQCs(qcSet []QC, ids []ID, mpk PublicKey) bool {
+	/*var wg sync.WaitGroup
+	var numVerified uint64 = 0
+	for _, qc := range qcSet {
+		wg.Add(1)
+		go func(qc QC) {
+			if qc.Sig.VerifyByte(&mpk, qc.Block) {
+				atomic.AddUint64(&numVerified, 1)
+			}
+			wg.Done()
+		}(qc)
+	}
+	wg.Wait()
+	return numVerified >= uint64(len(qcSet))*/
+
+	for i := 0; i < len(qcSet); i++ {
+		token := qcSet[i].Block
+		if !qcSet[i].Sig.VerifyByte(&mpk, token) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func makeAggQC(qcSet []QC) (AggQC, bool) {
 	msgSize := 32
 	var aggSig Sign
 	sigs := make([]Sign, len(qcSet))
 	pks := make([]PublicKey, len(qcSet))
 	aggMessage := make([]byte, msgSize)
+	verified := true
 
 	for i := 0; i < len(qcSet); i++ {
 		var sec SecretKey
@@ -594,6 +649,10 @@ func makeAggQC(qcSet []QC) AggQC {
 		pk := *sec.GetPublicKey()
 
 		block := qcSet[i].Block
+
+		if !qcSet[i].Sig.FastAggregateVerify(qcSet[i].PKs, block) {
+			verified = false
+		}
 
 		id := make([]byte, 4)
     		binary.LittleEndian.PutUint32(id, uint32(i))
@@ -610,7 +669,7 @@ func makeAggQC(qcSet []QC) AggQC {
 		pks[i] = pk
 	}
 	aggSig.Aggregate(sigs)
-	return AggQC{qcSet, 1, aggSig, pks}
+	return AggQC{qcSet, 1, aggSig, pks}, verified
 }
 
 func makeWendyKeys(f int, viewDifference int) ([][][]SecretKey, [][][]PublicKey) {
@@ -659,6 +718,29 @@ func makeWendyProof(qcSet []QC, secrets [][][]SecretKey, pubs [][][]PublicKey) (
 	//fmt.Println(pkBitmaps)
 	return AS.Agg(signShares), pkBitmaps, currView
 }
+
+func makeWendyProofVotes(voteSet []Vote, secrets [][][]SecretKey, pubs [][][]PublicKey) (Sign, []string, []byte) {
+	pkBitmaps := make([]string, len(voteSet))
+	signShares := make([]Sign, len(voteSet))
+
+	AS := AggregateSignature{}
+	currView := make([]byte, 4)
+    	binary.LittleEndian.PutUint32(currView, uint32(1000))
+
+
+	for i := 0; i < len(voteSet); i++ {
+		viewDiff := voteSet[i].ViewNumber
+		bits := strconv.FormatInt(int64(viewDiff), 2)
+
+		pkBitmaps[i] = bits
+		signShares[i] = AS.SignShare(secrets[i], bits, currView)
+	}
+
+	//fmt.Println("Make")
+	//fmt.Println(pkBitmaps)
+	return AS.Agg(signShares), pkBitmaps, currView
+}
+
 
 func verifyWendyProof(pk [][][]PublicKey, aggSig Sign, bitmaps []string, view []byte) bool {
 	AS := AggregateSignature{}
@@ -1035,7 +1117,10 @@ func BenchmarkAggQCVerify(b *testing.B) {
 	f := 3333
 	secrets, pubs := makeKeys(f)
 	qcSet := makeQCs(f, f, secrets, pubs)
-	aggQC := makeAggQC(qcSet)
+	aggQC, verifyQC := makeAggQC(qcSet)
+	if !verifyQC {
+		b.Fatal("Failed verifiying QCs")
+	}
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		if !verifyAggQC(aggQC) {
@@ -1062,6 +1147,25 @@ func BenchmarkWendyProofVerify(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSBFTVerify(b *testing.B) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	viewDifference := 1024
+	f := 3333
+	ids, secrets, mpk := makeThresholdKeys(f)
+	//makeThresholdKeys(f)
+
+	qcSet := makeThresholdQCs(f, viewDifference, ids, secrets)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		if !verifyThresholdQCs(qcSet, ids, mpk) {
+			b.Fatal("Failed verification")
+		}
+	}
+}
+
 
 
 
