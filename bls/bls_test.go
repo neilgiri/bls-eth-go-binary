@@ -2,11 +2,14 @@ package bls
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/csv"
 	"encoding/hex"
-	//"fmt"
+
+	"fmt"
 	"math"
+	"math/big"
 
 	"io"
 	"io/ioutil"
@@ -719,7 +722,7 @@ func makeWendyProof(qcSet []QC, secrets [][][]SecretKey, pubs [][][]PublicKey) (
 	return AS.Agg(signShares), pkBitmaps, currView
 }
 
-func makeWendyProofVotes(voteSet []Vote, secrets [][][]SecretKey, pubs [][][]PublicKey) (Sign, []string, []byte) {
+func makeWendyProofVotes(voteBits int, voteSet []Vote, secrets [][][]SecretKey, pubs [][][]PublicKey) (Sign, []string, []byte) {
 	pkBitmaps := make([]string, len(voteSet))
 	signShares := make([]Sign, len(voteSet))
 
@@ -732,20 +735,23 @@ func makeWendyProofVotes(voteSet []Vote, secrets [][][]SecretKey, pubs [][][]Pub
 		viewDiff := voteSet[i].ViewNumber
 		bits := strconv.FormatInt(int64(viewDiff), 2)
 
-		pkBitmaps[i] = bits
-		signShares[i] = AS.SignShare(secrets[i], bits, currView)
+		blockHash := sha256.New()
+		blockHash.Write(voteSet[i].Block)
+		hashInt := new(big.Int).SetBytes(blockHash.Sum(nil))
+
+		bitString := fmt.Sprintf("%b", hashInt)
+		pkString := bitString[0:voteBits] + bits
+
+		pkBitmaps[i] = pkString
+		signShares[i] = AS.SignShare(secrets[i], pkString, currView)
 	}
 
-	//fmt.Println("Make")
-	//fmt.Println(pkBitmaps)
 	return AS.Agg(signShares), pkBitmaps, currView
 }
 
 
 func verifyWendyProof(pk [][][]PublicKey, aggSig Sign, bitmaps []string, view []byte) bool {
 	AS := AggregateSignature{}
-	//fmt.Println("Verify")
-	//fmt.Println(bitmaps)
 	return AS.VerifyAgg(pk, bitmaps, view, aggSig)
 }
 
@@ -1165,6 +1171,29 @@ func BenchmarkSBFTVerify(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkWendyProofVotesVerify(b *testing.B) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+
+	total := 1048576
+	viewDifference := 1024
+	f := 3333
+
+	secrets, pubs := makeKeys(f)
+	voteSet := makeVotes(f, viewDifference, secrets, pubs)
+
+	sks, pks := makeWendyKeys(f, total)
+	wendyProof, bitmaps, commonView := makeWendyProofVotes(5, voteSet, sks, pks)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		if !verifyWendyProof(pks, wendyProof, bitmaps, commonView) {
+			b.Fatal("Failed verification")
+		}
+	}
+}
+
 
 
 
