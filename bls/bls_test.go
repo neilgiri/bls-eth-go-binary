@@ -613,6 +613,22 @@ func makeThresholdQCs(f int, viewDifference int, ids []ID, secrets []SecretKey) 
 	return qcSet
 }
 
+func makeThresholdVotes(f int, viewDifference int, ids []ID, secretsFastPath []SecretKey) []Vote {
+	k := 2*f+1
+	msgSize := 32
+	voteSet := make([]Vote, k)
+	
+	for i := 0; i < k; i++ {
+		token := make([]byte, msgSize)
+    		rand.Read(token)
+
+		fastPathSig := secretsFastPath[i].SignByte(token)
+		voteSet[i] = Vote{i%viewDifference, token, *secretsFastPath[i].GetPublicKey(), *fastPathSig}
+	}
+
+	return voteSet
+}
+
 func verifyThresholdQCs(qcSet []QC, ids []ID, mpk PublicKey) bool {
 	/*var wg sync.WaitGroup
 	var numVerified uint64 = 0
@@ -631,6 +647,36 @@ func verifyThresholdQCs(qcSet []QC, ids []ID, mpk PublicKey) bool {
 	for i := 0; i < len(qcSet); i++ {
 		token := qcSet[i].Block
 		if !qcSet[i].Sig.VerifyByte(&mpk, token) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func verifyThreshold(qcSet []QC, voteSet []Vote, ids []ID, mpk PublicKey, pks []PublicKey) bool {
+	/*var wg sync.WaitGroup
+	var numVerified uint64 = 0
+	for _, qc := range qcSet {
+		wg.Add(1)
+		go func(qc QC) {
+			if qc.Sig.VerifyByte(&mpk, qc.Block) {
+				atomic.AddUint64(&numVerified, 1)
+			}
+			wg.Done()
+		}(qc)
+	}
+	wg.Wait()
+	return numVerified >= uint64(len(qcSet))*/
+
+	for i := 0; i < len(voteSet); i++ {
+		tokenQC := qcSet[i].Block
+		if !qcSet[i].Sig.VerifyByte(&mpk, tokenQC) {
+			return false
+		}
+
+		token := voteSet[i].Block
+		if !voteSet[i].Sig.VerifyByte(&pks[i], token) {
 			return false
 		}
 	}
@@ -1162,11 +1208,17 @@ func BenchmarkSBFTVerify(b *testing.B) {
 	f := 3333
 	ids, secrets, mpk := makeThresholdKeys(f)
 	//makeThresholdKeys(f)
+	sks, pks := makeKeys(f)
 
 	qcSet := makeThresholdQCs(f, viewDifference, ids, secrets)
+	voteSet := makeThresholdVotes(f, viewDifference, ids, sks)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		if !verifyThresholdQCs(qcSet, ids, mpk) {
+		/*if !verifyThresholdQCs(qcSet, ids, mpk) {
+			b.Fatal("Failed verification")
+		}*/
+
+		if !verifyThreshold(qcSet, voteSet, ids, mpk, pks) {
 			b.Fatal("Failed verification")
 		}
 	}
@@ -1183,13 +1235,19 @@ func BenchmarkWendyProofVotesVerify(b *testing.B) {
 
 	secrets, pubs := makeKeys(f)
 	voteSet := makeVotes(f, viewDifference, secrets, pubs)
+	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 
 	sks, pks := makeWendyKeys(f, total)
 	wendyProof, bitmaps, commonView := makeWendyProofVotes(5, voteSet, sks, pks)
+	qcProof, bitmapsQCs, view := makeWendyProof(qcSet, sks, pks)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		if !verifyWendyProof(pks, wendyProof, bitmaps, commonView) {
+		if !verifyWendyProof(pks, qcProof, bitmapsQCs, view) {
 			b.Fatal("Failed verification")
+		}
+
+		if !verifyWendyProof(pks, wendyProof, bitmaps, commonView) {
+			b.Fatal("Failed verification votes")
 		}
 	}
 }
