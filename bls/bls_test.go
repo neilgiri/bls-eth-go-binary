@@ -1,6 +1,8 @@
 package bls
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -15,9 +17,9 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
-	//"sync"
-	//"sync/atomic"
 )
 
 func testUncompressedG1(t *testing.T, gen1 *G1) {
@@ -403,6 +405,18 @@ type AggQC struct {
 	PKs []PublicKey
 }
 
+type ECDSASig struct {
+	R big.Int
+	S big.Int
+}
+
+type ECDSAQC struct {
+	ViewNumber int
+	Block []byte
+	PKs []ecdsa.PublicKey
+	Sigs []ECDSASig
+}
+
 type AggregateSignature struct {
 }
 
@@ -506,19 +520,21 @@ func makeMultiSig(n int) (pubs []PublicKey, sigs []Sign, msgs []byte) {
 	return pubs, sigs, msgs
 }
 
-func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey) {
+func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey, pops []Sign) {
 	n := 2*f+1
 	secrets = make([]SecretKey, n)
 	pubs = make([]PublicKey, n)
+	pops = make([]Sign, n)
 
 	for i := 0; i < n; i++ {
 		var sec SecretKey
 		sec.SetByCSPRNG()
 		secrets[i] = sec
 		pubs[i] = *sec.GetPublicKey()
+		pops[i] = *sec.GetPop()
 	}
 
-	return secrets, pubs
+	return secrets, pubs, pops
 }
 
 func makeThresholdKeys(f int) (identifiers []ID, secrets []SecretKey, masterPubKey PublicKey) {
@@ -543,6 +559,21 @@ func makeThresholdKeys(f int) (identifiers []ID, secrets []SecretKey, masterPubK
 	secretKey.Recover(msk, ids)
 	mpk := secretKey.GetPublicKey()
 	return ids, sks, *mpk
+}
+
+func makeECDASKeys(f int) (secrets []ecdsa.PrivateKey, pubs []ecdsa.PublicKey) {
+	n := 2*f+1
+	secrets = make([]ecdsa.PrivateKey, n)
+	pubs = make([]ecdsa.PublicKey, n)
+
+	curve := elliptic.P256()
+	for i := 0; i < n; i++ {
+		sec, _ := ecdsa.GenerateKey(curve, rand.Reader)
+		secrets[i] = *sec
+		pubs[i] = sec.PublicKey
+	}
+
+	return secrets, pubs
 }
 
 func makeVotes(f int, viewDifference int, sks []SecretKey, pks []PublicKey) []Vote {
@@ -613,6 +644,33 @@ func makeThresholdQCs(f int, viewDifference int, ids []ID, secrets []SecretKey) 
 	return qcSet
 }
 
+func makeECDSAQCs(f int, viewDifference int, secrets []ecdsa.PrivateKey, pubs []ecdsa.PublicKey) []ECDSAQC {
+	n := 2*f+1
+	msgSize := 32
+	qcSet := make([]ECDSAQC, n)
+	qcViews := make([]ECDSAQC, viewDifference)
+	
+	for i := 0; i < viewDifference; i++ {
+		token := make([]byte, msgSize)
+    		rand.Read(token)
+		sigs := make([]ECDSASig, n)
+
+		for j := 0; j < n; j++ {
+			r, s, _ := ecdsa.Sign(rand.Reader, &secrets[j], token)
+			sigs[j] = ECDSASig{*r, *s}
+		}
+
+		qcViews[i] = ECDSAQC{i, token, pubs, sigs}
+	}
+
+	for i := 0; i < n; i++ {
+		qcSet[i] = qcViews[i%viewDifference]
+	}
+
+	return qcSet
+}
+
+
 func makeThresholdVotes(f int, viewDifference int, ids []ID, secretsFastPath []SecretKey) []Vote {
 	k := 2*f+1
 	msgSize := 32
@@ -654,22 +712,24 @@ func verifyThresholdQCs(qcSet []QC, ids []ID, mpk PublicKey) bool {
 	return true
 }
 
-func verifyThreshold(qcSet []QC, voteSet []Vote, ids []ID, mpk PublicKey, pks []PublicKey) bool {
-	/*var wg sync.WaitGroup
+func verifySBFT(qcSet []QC, voteSet []Vote, ids []ID, mpk PublicKey, pks []PublicKey) bool {
+	var wg sync.WaitGroup
+
 	var numVerified uint64 = 0
-	for _, qc := range qcSet {
+	for i := 0; i < len(qcSet); i++ {
 		wg.Add(1)
-		go func(qc QC) {
-			if qc.Sig.VerifyByte(&mpk, qc.Block) {
+		go func(qc QC, vote Vote, pk PublicKey) {
+			if qc.Sig.VerifyByte(&mpk, qc.Block) && vote.Sig.VerifyByte(&pk, vote.Block) {
 				atomic.AddUint64(&numVerified, 1)
 			}
 			wg.Done()
-		}(qc)
+		}(qcSet[i], voteSet[i], pks[i])
 	}
 	wg.Wait()
-	return numVerified >= uint64(len(qcSet))*/
+	
+	return numVerified >= uint64(len(qcSet))
 
-	for i := 0; i < len(voteSet); i++ {
+	/*for i := 0; i < len(voteSet); i++ {
 		tokenQC := qcSet[i].Block
 		if !qcSet[i].Sig.VerifyByte(&mpk, tokenQC) {
 			return false
@@ -681,7 +741,7 @@ func verifyThreshold(qcSet []QC, voteSet []Vote, ids []ID, mpk PublicKey, pks []
 		}
 	}
 
-	return true
+	return true*/
 }
 
 func makeAggQC(qcSet []QC) (AggQC, bool) {
@@ -721,29 +781,34 @@ func makeAggQC(qcSet []QC) (AggQC, bool) {
 	return AggQC{qcSet, 1, aggSig, pks}, verified
 }
 
-func makeWendyKeys(f int, viewDifference int) ([][][]SecretKey, [][][]PublicKey) {
+func makeWendyKeys(f int, viewDifference int) ([][][]SecretKey, [][][]PublicKey, [][][]Sign) {
 	n := 2*f+1
 	numKeys := int(math.Log2(float64(viewDifference)))
 	sks := make([][][]SecretKey, n)
 	pks := make([][][]PublicKey, n)
+	pops := make([][][]Sign, n)
 
 	for i := 0; i < n; i++ {
 		sks[i] = make([][]SecretKey, numKeys)
 		pks[i] = make([][]PublicKey, numKeys)
+		pops[i] = make([][]Sign, numKeys)
+
 		for j := 0; j < numKeys; j++ {
 			sks[i][j] = make([]SecretKey, 2)
 			pks[i][j] = make([]PublicKey, 2)
+			pops[i][j] = make([]Sign, 2)
 			for k := 0; k < 2; k++ {
 				var sec SecretKey
 				sec.SetByCSPRNG()
 				pk := *sec.GetPublicKey()
 				sks[i][j][k] = sec
 				pks[i][j][k] = pk
+				pops[i][j][k] = *sec.GetPop()
 			}
 		}
 	}
 
-	return sks, pks
+	return sks, pks, pops
 }
 
 
@@ -755,6 +820,23 @@ func makeWendyProof(qcSet []QC, secrets [][][]SecretKey, pubs [][][]PublicKey) (
 	currView := make([]byte, 4)
     	binary.LittleEndian.PutUint32(currView, uint32(1000))
 
+	var wg sync.WaitGroup
+
+	var numVerified uint64 = 0
+	for i := 0; i < len(qcSet); i++ {
+		wg.Add(1)
+		go func(qc QC) {
+			if qc.Sig.FastAggregateVerify(qc.PKs, qc.Block) {
+				atomic.AddUint64(&numVerified, 1)
+			}
+			wg.Done()
+		}(qcSet[i])
+	}
+	wg.Wait()
+	
+	if numVerified >= uint64(len(qcSet)) {
+		return Sign{}, nil, nil
+	}
 
 	for i := 0; i < len(qcSet); i++ {
 		viewDiff := qcSet[i].ViewNumber
@@ -1167,7 +1249,7 @@ func BenchmarkAggQCVerify(b *testing.B) {
 	Init(BLS12_381)
 	SetETHmode(EthModeDraft07)
 	f := 3333
-	secrets, pubs := makeKeys(f)
+	secrets, pubs, _ := makeKeys(f)
 	qcSet := makeQCs(f, f, secrets, pubs)
 	aggQC, verifyQC := makeAggQC(qcSet)
 	if !verifyQC {
@@ -1187,10 +1269,10 @@ func BenchmarkWendyProofVerify(b *testing.B) {
 	SetETHmode(EthModeDraft07)
 	viewDifference := 1024
 	f := 3333
-	secrets, pubs := makeKeys(f)
+	secrets, pubs, _ := makeKeys(f)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 
-	sks, pks := makeWendyKeys(f, viewDifference)
+	sks, pks, _ := makeWendyKeys(f, viewDifference)
 	wendyProof, bitmaps, commonView := makeWendyProof(qcSet, sks, pks)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
@@ -1208,7 +1290,7 @@ func BenchmarkSBFTVerify(b *testing.B) {
 	f := 3333
 	ids, secrets, mpk := makeThresholdKeys(f)
 	//makeThresholdKeys(f)
-	sks, pks := makeKeys(f)
+	sks, pks, _ := makeKeys(f)
 
 	qcSet := makeThresholdQCs(f, viewDifference, ids, secrets)
 	voteSet := makeThresholdVotes(f, viewDifference, ids, sks)
@@ -1218,7 +1300,7 @@ func BenchmarkSBFTVerify(b *testing.B) {
 			b.Fatal("Failed verification")
 		}*/
 
-		if !verifyThreshold(qcSet, voteSet, ids, mpk, pks) {
+		if !verifySBFT(qcSet, voteSet, ids, mpk, pks) {
 			b.Fatal("Failed verification")
 		}
 	}
@@ -1233,11 +1315,11 @@ func BenchmarkWendyProofVotesVerify(b *testing.B) {
 	viewDifference := 1024
 	f := 3333
 
-	secrets, pubs := makeKeys(f)
+	secrets, pubs, _ := makeKeys(f)
 	voteSet := makeVotes(f, viewDifference, secrets, pubs)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 
-	sks, pks := makeWendyKeys(f, total)
+	sks, pks, _ := makeWendyKeys(f, total)
 	wendyProof, bitmaps, commonView := makeWendyProofVotes(5, voteSet, sks, pks)
 	qcProof, bitmapsQCs, view := makeWendyProof(qcSet, sks, pks)
 	b.StartTimer()
@@ -1251,8 +1333,5 @@ func BenchmarkWendyProofVotesVerify(b *testing.B) {
 		}
 	}
 }
-
-
-
 
 
