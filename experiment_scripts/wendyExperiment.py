@@ -23,6 +23,7 @@ import random
 import multiprocessing
 import subprocess
 import toml
+import math
 
 sys.path.append("util/")
 
@@ -1038,18 +1039,82 @@ def generateData(results, folderName, clients, time):
     results[clients] = result
 
 
-def generateBandwidthData(results, folderName):
-    print("Generating Data for " + folderName)
+
+def bandwidthGraphs():
+    generateBandwidthDataFvalues("bandwidth-f.dat")
+    plotBandwidth([("bandwidth-f.dat", "FHS-100KB"), ("bandwidth-f.dat", "FHS-Wendy-100KB")], "fhs", [1, 2], "Fast-HotStuff-Bandwidth")
+    plotBandwidth([("bandwidth-f.dat", "SBFT-100KB"), ("bandwidth-f.dat", "SBFT-Wendy-100KB")], "sbft", [3, 4], "SBFT-Bandwidth")
+    plotBandwidth([("bandwidth-f.dat", "2HS-100KB"), ("bandwidth-f.dat", "2HS-Wendy-100KB")], "2hs", [5, 6], "2HS-Bandwidth")
+
+    generateBandwidthDataBS("bandwidth-bs.dat")
+    plotBandwidthBatch([("bandwidth-bs.dat", "FHS-333"),("bandwidth-bs.dat", "FHS-Wendy-333")], "fhs-333", [1, 2], "Fast-HotStuff-Bandwidth")
+    plotBandwidthBatch([("bandwidth-bs.dat", "SBFT-333"),("bandwidth-bs.dat", "SBFT-Wendy-333")], "sbft-333", [3, 4], "SBFT-Bandwidth")
+    plotBandwidthBatch([("bandwidth-bs.dat", "2HS-333"),("bandwidth-bs.dat", "2HS-Wendy-333")], "2hs-333", [1, 2], "2HS-Bandwidth")
+
+def storageGraphs():
+    generateStorageDataFvalues("storage-f.dat")
+    plotStorage([("storage-f.dat", "FHS"),("storage-f.dat", "Wendy"),("storage-f.dat", "SBFT"),("storage-f.dat", "2HS")], "storage", [1,2,3,4])
+    
+    
+
+def generateBandwidthDataFvalues(path):
+    print("Generating Data for " + path)
     batch_sizes = [100, 400, 800, 1000, 10000, 20000]
     f_values = [1, 3, 10, 33, 100, 333, 1000, 3333, 10000]
     view_diff_bits = 20
     result = ""
+    bs = 1000
+    bandwidth_file = open(path, "w")
+
+    for f in f_values:
+        view_diff_bits = math.log2(f)
+        result += str(f) + " " + str(calculateBandwidthFastHotStuff(f, bs)/1000.0) + " " + str(calculateBandwidthWendy(f, bs, view_diff_bits)/1000.0) + " " + str(calculateBandwidthSBFT(f, bs)/1000.0) + " " + str(calculateBandwidthSBFTProof(f, bs, view_diff_bits)/1000.0) + " " + str(calculateBandwidthCasper(f, bs)/1000.0) + " " + str(calculateBandwidthCasperRelaxedRule(f, bs, view_diff_bits)/1000.0) + " " + "\n"
+    bandwidth_file.write(result)
+
+
+def generateBandwidthDataBS(path):
+    print("Generating Data for " + path)
+    batch_sizes = [100, 400, 800, 1000, 10000, 20000]
+    f_values = [1, 3, 10, 33, 100, 333, 1000, 3333, 10000]
+    view_diff_bits = 20
+    result = ""
+    bs = 1000
+    f = 333
+    bandwidth_file = open(path, "w")
 
     for bs in batch_sizes:
-        for f in f_values:
-            result += str(calculateBandwidthWendy(f, bs, view_diff_bits)) + " " + str(calculateBandwidthFastHotStuff(f, bs)) + " " + str(calculateBandwidthSBFT(f, bs)) + " " + str(calculateBandwidthCasper(f, bs)) + "\n"
+        view_diff_bits = math.log2(f)
+        result += str(bs/10) + " " + str(calculateBandwidthFastHotStuff(f, bs)/1000.0) + " " + str(calculateBandwidthWendy(f, bs, view_diff_bits)/1000.0) + " " + str(calculateBandwidthSBFT(f, bs)/1000.0) + " " + str(calculateBandwidthSBFTProof(f, bs, view_diff_bits)/1000.0) + " " + str(calculateBandwidthCasper(f, bs)/1000.0) + " " + str(calculateBandwidthCasperRelaxedRule(f, bs, view_diff_bits)/1000.0) + " " + "\n"
+    bandwidth_file.write(result)
 
-    results[clients] = result
+def generateStorageDataFvalues(path):
+    print("Generating Data for " + path)
+    batch_sizes = [100, 400, 800, 1000, 10000, 20000]
+    f_values = [1, 3, 10, 33, 100, 333, 1000, 3333, 10000]
+    view_diff_bits = 20
+    result = ""
+    bs = 1000
+    bandwidth_file = open(path, "w")
+
+    for f in f_values:
+        view_diff_bits = math.log2(3*f+1)
+        result += str(f) + " " + str(calculateStorageFastHotStuff(f)/1000.0) + " " + str(calculateStorageWendy(f, view_diff_bits)/1000.0) + " " + str(calculateStorageSBFT(f)/1000.0) + " " + str(calculateStorageTwoHotStuff(f)/1000.0) + "\n"
+    bandwidth_file.write(result)
+
+def generateStorageDataViewDiff(path):
+    print("Generating Data for " + path)
+    batch_sizes = [100, 400, 800, 1000, 10000, 20000]
+    f_values = [1, 3, 10, 33, 100, 333, 1000, 3333, 10000]
+    view_diff_bits = 20
+    result = ""
+    bs = 1000
+    bandwidth_file = open(path, "w")
+    f = 333
+
+    for f in f_values:
+        view_diff_bits = math.log2(3*f+1)
+        result += str(f) + " " + str(calculateStorageFastHotStuff(f)/1000.0) + " " + str(calculateStorageWendy(f, view_diff_bits)/1000.0) + " " + str(calculateStorageSBFT(f)/1000.0) + " " + str(calculateStorageTwoHotStuff(f)/1000.0) + "\n"
+    bandwidth_file.write(result)
 
 
 def qcFastHotStuffSize(f):
@@ -1089,42 +1154,43 @@ def calculateBandwidthWendy(f, batch_size, view_diff):
     cmd = transaction_size * batch_size
     common_view = 4
     qc = qcFastHotStuffSize(f)
-    pk_vector = 2 * view_diff * n
-    pk_ids = n*4
+    pk_vector = (2 * view_diff * n)/8
     quorum_proof = 96
-    return cmd + common_view + pk_vector + qc + quorum_proof + pk_ids
+    return cmd + common_view + pk_vector + qc + quorum_proof
 
 def calculateStorageWendy(f, view_diff):
+    sk = 32
     pk = 48
     pop = 96
     n = 3*f+1
 
     num_items = n + n*view_diff*2
-    return pk*num_items + pop*num_items
+    return pk*num_items + pop*num_items + sk*n*view_diff*2
 
 def calculateStorageFastHotStuff(f):
+    sk = 32
     pk = 48
     pop = 96
     n = 3*f+1
 
     num_items = n
-    return pk*num_items + pop*num_items
+    return pk*num_items + pop*num_items + sk
 
 def calculateStorageSBFT(f):
+    sk = 32
     pk = 48
     n = 3*f+1
 
-    num_items = n
-    return pk*num_items
+    num_items = 2
+    return pk*num_items + sk*num_items
 
-def calculateStorageCasper(f):
+def calculateStorageTwoHotStuff(f):
+    sk = 32
     pk = 48
-    pop = 96
     n = 3*f+1
 
-    num_items = n
-    return pk*num_items + pop*n
-
+    num_items = 1
+    return pk*num_items + sk*num_items
 
 def calculateBandwidthSBFT(f, batch_size):
     transaction_size = 100
@@ -1133,10 +1199,20 @@ def calculateBandwidthSBFT(f, batch_size):
     vc_messages = n * 2 * qcSBFTSize()
     return cmd + vc_messages
 
+def calculateBandwidthSBFTProof(f, batch_size, view_diff):
+    transaction_size = 100
+    n = 2*f+1
+    cmd = transaction_size * batch_size
+    common_view = 4
+    qc = qcFastHotStuffSize(f)
+    pk_vector = (2 * view_diff * n) / 8
+    quorum_proof = 96
+    return cmd + common_view + pk_vector + qc + quorum_proof
+
 def calculateBandwidthCasper(f, batch_size):
     transaction_size = 100
     cmd = transaction_size * batch_size
-    qc = qcFastHotStuffSize(f)
+    qc = qcSBFTSize()
     return cmd + qc
 
 def calculateBandwidthCasperRelaxedRule(f, batch_size, view_diff):
@@ -1147,10 +1223,9 @@ def calculateBandwidthCasperRelaxedRule(f, batch_size, view_diff):
 
     common_view = 4
     pk_vector = 2 * view_diff * n
-    pk_ids = n*4
     quorum_proof = 96
 
-    return cmd + qc + common_view + pk_vector + quorum_proof + pk_ids
+    return cmd + qc + common_view + pk_vector + quorum_proof
 
 
 
@@ -1201,6 +1276,58 @@ def plotLatency(dataFileNames, outputFileName, title=None):
         data.append((x[0], x[1], 0, 1))
     plotLine(title, x_axis, y_axis, outputFileName,
              data, False, xrightlim=300, yrightlim=5)
+
+def plotBandwidth(dataFileNames, outputFileName, indices, title=None):
+    x_axis = "f"
+    y_axis = "Bandwidth (KB)"
+    if (not title):
+        title = "Default"
+    data = list()
+
+#    for x in dataFileNames:
+#        data.append((x[0], 1, 2))
+
+    data.append((dataFileNames[0][0], dataFileNames[0][1], 0, indices[0]))
+    data.append((dataFileNames[1][0], dataFileNames[1][1], 0, indices[1]))
+    print(title)
+#    plotBars(title, [1, 3, 10, 33, 100, 333, 1000, 3333, 10000], ["FHS", "W"], y_axis, data, True, "bandwidth-f", logY=True)
+    plotLine(title, x_axis, y_axis, outputFileName, data, True, xrightlim=12000, yrightlim=1000000, logY=True, logX=True)
+
+def plotBandwidthBatch(dataFileNames, outputFileName, indices, title=None):
+    x_axis = "Batch Size (KB)"
+    y_axis = "Bandwidth (KB)"
+    if (not title):
+        title = "Default"
+    data = list()
+
+#    for x in dataFileNames:
+#        data.append((x[0], 1, 2))
+
+    data.append((dataFileNames[0][0], dataFileNames[0][1], 0, indices[0]))
+    data.append((dataFileNames[1][0], dataFileNames[1][1], 0, indices[1]))
+    print(title)
+#    plotBars(title, [1, 3, 10, 33, 100, 333, 1000, 3333, 10000], ["FHS", "W"], y_axis, data, True, "bandwidth-f", logY=True)
+    plotLine(title, x_axis, y_axis, outputFileName, data, True, xrightlim=100000, yrightlim=1000000, logY=True, logX=True)
+
+def plotStorage(dataFileNames, outputFileName, indices, title=None):
+    x_axis = "f"
+    y_axis = "Storage (KB)"
+    if (not title):
+        title = "Default"
+    data = list()
+
+#    for x in dataFileNames:
+#        data.append((x[0], 1, 2))
+
+    data.append((dataFileNames[0][0], dataFileNames[0][1], 0, indices[0]))
+    data.append((dataFileNames[1][0], dataFileNames[1][1], 0, indices[1]))
+    data.append((dataFileNames[2][0], dataFileNames[2][1], 0, indices[2]))
+    data.append((dataFileNames[3][0], dataFileNames[3][1], 0, indices[3]))
+    
+    print(title)
+#    plotBars(title, [1, 3, 10, 33, 100, 333, 1000, 3333, 10000], ["FHS", "W"], y_axis, data, True, "bandwidth-f", logY=True)
+    plotLine(title, x_axis, y_axis, outputFileName, data, True, xrightlim=100000, yrightlim=1000000, logY=True, logX=True)
+
 
 def plotAggSigBench(dataFileNames, outputFileName, title=None):
     x_axis = "f"

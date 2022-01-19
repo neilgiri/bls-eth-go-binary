@@ -80,7 +80,8 @@ def plotLine(title, x_axis, y_axis, save, data, points, legend='upper left', xle
         print("Outputting graphs")
         plt.setp(ax.get_xticklabels(), rotation='vertical')
 
-        # ax.set_xlim(left=0)
+        ax.set_xlim(left=1)
+        ax.set_ylim(bottom=1e-2)
         if (logY):
             ax.set_yscale('log')
         if (logX):

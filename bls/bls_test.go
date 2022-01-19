@@ -17,8 +17,6 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"testing"
 )
 
@@ -384,25 +382,25 @@ func ethFastAggregateVerifyTest(t *testing.T) {
 }
 
 type QC struct {
-	Type string
+	Type       string
 	ViewNumber int
-	Block []byte
-	PKs []PublicKey
-	Sig Sign
+	Block      []byte
+	PKs        []PublicKey
+	Sig        Sign
 }
 
 type Vote struct {
 	ViewNumber int
-	Block []byte
-	PK PublicKey
-	Sig Sign
+	Block      []byte
+	PK         PublicKey
+	Sig        Sign
 }
 
 type AggQC struct {
 	QCset []QC
-	View int
-	Sig Sign
-	PKs []PublicKey
+	View  int
+	Sig   Sign
+	PKs   []PublicKey
 }
 
 type ECDSASig struct {
@@ -412,9 +410,9 @@ type ECDSASig struct {
 
 type ECDSAQC struct {
 	ViewNumber int
-	Block []byte
-	PKs []ecdsa.PublicKey
-	Sigs []ECDSASig
+	Block      []byte
+	PKs        []ecdsa.PublicKey
+	Sigs       []ECDSASig
 }
 
 type AggregateSignature struct {
@@ -521,7 +519,7 @@ func makeMultiSig(n int) (pubs []PublicKey, sigs []Sign, msgs []byte) {
 }
 
 func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey, pops []Sign) {
-	n := 2*f+1
+	n := 2*f + 1
 	secrets = make([]SecretKey, n)
 	pubs = make([]PublicKey, n)
 	pops = make([]Sign, n)
@@ -538,15 +536,15 @@ func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey, pops []Sign) {
 }
 
 func makeThresholdKeys(f int) (identifiers []ID, secrets []SecretKey, masterPubKey PublicKey) {
-	k := 2*f+1
-	n := 3*f+1
+	k := 2*f + 1
+	n := 3*f + 1
 	ids := make([]ID, n)
 	sks := make([]SecretKey, n)
 	//pks := make([]PublicKey, n)
 
 	var secretKey SecretKey
 	secretKey.SetByCSPRNG()
-	
+
 	msk := secretKey.GetMasterSecretKey(k)
 
 	for i := 0; i < n; i++ {
@@ -562,7 +560,7 @@ func makeThresholdKeys(f int) (identifiers []ID, secrets []SecretKey, masterPubK
 }
 
 func makeECDASKeys(f int) (secrets []ecdsa.PrivateKey, pubs []ecdsa.PublicKey) {
-	n := 2*f+1
+	n := 2*f + 1
 	secrets = make([]ecdsa.PrivateKey, n)
 	pubs = make([]ecdsa.PublicKey, n)
 
@@ -577,29 +575,28 @@ func makeECDASKeys(f int) (secrets []ecdsa.PrivateKey, pubs []ecdsa.PublicKey) {
 }
 
 func makeVotes(f int, viewDifference int, sks []SecretKey, pks []PublicKey) []Vote {
-	n := 2*f+1
+	n := 2*f + 1
 	msgSize := 32
 	voteSet := make([]Vote, n)
 
 	for i := 0; i < n; i++ {
 		token := make([]byte, msgSize)
-    		rand.Read(token)
+		rand.Read(token)
 
 		sig := *sks[i].SignByte(token)
-		vote := Vote{i%viewDifference, token, pks[i], sig}
+		vote := Vote{i % viewDifference, token, pks[i], sig}
 		voteSet[i] = vote
 	}
 
 	return voteSet
 }
 
-
 func makeQCs(f int, viewDifference int, secrets []SecretKey, pubs []PublicKey) []QC {
-	n := 2*f+1
+	n := 2*f + 1
 	msgSize := 32
 	qcSet := make([]QC, n)
 	qcViews := make([]QC, viewDifference)
-	
+
 	secretKey := secrets[0]
 	for j := 1; j < n; j++ {
 		secretKey.Add(&secrets[j])
@@ -607,7 +604,7 @@ func makeQCs(f int, viewDifference int, secrets []SecretKey, pubs []PublicKey) [
 
 	for i := 0; i < viewDifference; i++ {
 		token := make([]byte, msgSize)
-    		rand.Read(token)
+		rand.Read(token)
 
 		multiSig := secretKey.SignByte(token)
 		qcViews[i] = QC{"", i, token, pubs, *multiSig}
@@ -621,17 +618,17 @@ func makeQCs(f int, viewDifference int, secrets []SecretKey, pubs []PublicKey) [
 }
 
 func makeThresholdQCs(f int, viewDifference int, ids []ID, secrets []SecretKey) []QC {
-	k := 2*f+1
+	k := 2*f + 1
 	msgSize := 32
 	qcSet := make([]QC, k)
 	qcViews := make([]QC, viewDifference)
-	
+
 	var msk SecretKey
 	msk.Recover(secrets, ids)
 
 	for i := 0; i < viewDifference; i++ {
 		token := make([]byte, msgSize)
-    		rand.Read(token)
+		rand.Read(token)
 
 		thresholdSig := msk.SignByte(token)
 		qcViews[i] = QC{"", i, token, nil, *thresholdSig}
@@ -645,14 +642,14 @@ func makeThresholdQCs(f int, viewDifference int, ids []ID, secrets []SecretKey) 
 }
 
 func makeECDSAQCs(f int, viewDifference int, secrets []ecdsa.PrivateKey, pubs []ecdsa.PublicKey) []ECDSAQC {
-	n := 2*f+1
+	n := 2*f + 1
 	msgSize := 32
 	qcSet := make([]ECDSAQC, n)
 	qcViews := make([]ECDSAQC, viewDifference)
-	
+
 	for i := 0; i < viewDifference; i++ {
 		token := make([]byte, msgSize)
-    		rand.Read(token)
+		rand.Read(token)
 		sigs := make([]ECDSASig, n)
 
 		for j := 0; j < n; j++ {
@@ -670,18 +667,17 @@ func makeECDSAQCs(f int, viewDifference int, secrets []ecdsa.PrivateKey, pubs []
 	return qcSet
 }
 
-
 func makeThresholdVotes(f int, viewDifference int, ids []ID, secretsFastPath []SecretKey) []Vote {
-	k := 2*f+1
+	k := 2*f + 1
 	msgSize := 32
 	voteSet := make([]Vote, k)
-	
+
 	for i := 0; i < k; i++ {
 		token := make([]byte, msgSize)
-    		rand.Read(token)
+		rand.Read(token)
 
 		fastPathSig := secretsFastPath[i].SignByte(token)
-		voteSet[i] = Vote{i%viewDifference, token, *secretsFastPath[i].GetPublicKey(), *fastPathSig}
+		voteSet[i] = Vote{i % viewDifference, token, *secretsFastPath[i].GetPublicKey(), *fastPathSig}
 	}
 
 	return voteSet
@@ -713,7 +709,7 @@ func verifyThresholdQCs(qcSet []QC, ids []ID, mpk PublicKey) bool {
 }
 
 func verifySBFT(qcSet []QC, voteSet []Vote, ids []ID, mpk PublicKey, pks []PublicKey) bool {
-	var wg sync.WaitGroup
+	/*var wg sync.WaitGroup
 
 	var numVerified uint64 = 0
 	for i := 0; i < len(qcSet); i++ {
@@ -726,10 +722,10 @@ func verifySBFT(qcSet []QC, voteSet []Vote, ids []ID, mpk PublicKey, pks []Publi
 		}(qcSet[i], voteSet[i], pks[i])
 	}
 	wg.Wait()
-	
-	return numVerified >= uint64(len(qcSet))
 
-	/*for i := 0; i < len(voteSet); i++ {
+	return numVerified >= uint64(len(qcSet))*/
+
+	for i := 0; i < len(voteSet); i++ {
 		tokenQC := qcSet[i].Block
 		if !qcSet[i].Sig.VerifyByte(&mpk, tokenQC) {
 			return false
@@ -741,7 +737,25 @@ func verifySBFT(qcSet []QC, voteSet []Vote, ids []ID, mpk PublicKey, pks []Publi
 		}
 	}
 
-	return true*/
+	return true
+}
+
+func verify2HS(qc QC, ids []ID, mpk PublicKey) bool {
+	return qc.Sig.VerifyByte(&mpk, qc.Block)
+}
+
+func make2HSProof(qcSet []QC, mpk PublicKey) bool {
+	verified := true
+
+	for i := 0; i < len(qcSet); i++ {
+		block := qcSet[i].Block
+
+		if !qcSet[i].Sig.VerifyByte(&mpk, block) {
+			verified = false
+		}
+
+	}
+	return verified
 }
 
 func makeAggQC(qcSet []QC) (AggQC, bool) {
@@ -764,7 +778,7 @@ func makeAggQC(qcSet []QC) (AggQC, bool) {
 		}
 
 		id := make([]byte, 4)
-    		binary.LittleEndian.PutUint32(id, uint32(i))
+		binary.LittleEndian.PutUint32(id, uint32(i))
 
 		for j := 0; j < msgSize; j++ {
 			if j > 3 {
@@ -782,8 +796,8 @@ func makeAggQC(qcSet []QC) (AggQC, bool) {
 }
 
 func makeWendyKeys(f int, viewDifference int) ([][][]SecretKey, [][][]PublicKey, [][][]Sign) {
-	n := 2*f+1
-	numKeys := int(math.Log2(float64(viewDifference)))
+	n := 2*f + 1
+	numKeys := int(math.Ceil(math.Log2(float64(viewDifference))))
 	sks := make([][][]SecretKey, n)
 	pks := make([][][]PublicKey, n)
 	pops := make([][][]Sign, n)
@@ -811,38 +825,24 @@ func makeWendyKeys(f int, viewDifference int) ([][][]SecretKey, [][][]PublicKey,
 	return sks, pks, pops
 }
 
-
 func makeWendyProof(qcSet []QC, secrets [][][]SecretKey, pubs [][][]PublicKey) (Sign, []string, []byte) {
 	pkBitmaps := make([]string, len(qcSet))
 	signShares := make([]Sign, len(qcSet))
 
 	AS := AggregateSignature{}
 	currView := make([]byte, 4)
-    	binary.LittleEndian.PutUint32(currView, uint32(1000))
-
-	var wg sync.WaitGroup
-
-	var numVerified uint64 = 0
-	for i := 0; i < len(qcSet); i++ {
-		wg.Add(1)
-		go func(qc QC) {
-			if qc.Sig.FastAggregateVerify(qc.PKs, qc.Block) {
-				atomic.AddUint64(&numVerified, 1)
-			}
-			wg.Done()
-		}(qcSet[i])
-	}
-	wg.Wait()
-	
-	if numVerified >= uint64(len(qcSet)) {
-		return Sign{}, nil, nil
-	}
+	binary.LittleEndian.PutUint32(currView, uint32(1000))
 
 	for i := 0; i < len(qcSet); i++ {
+		qc := qcSet[i]
+		if !qc.Sig.FastAggregateVerify(qc.PKs, qc.Block) {
+			return Sign{}, nil, nil
+		}
 		viewDiff := qcSet[i].ViewNumber
 		bits := strconv.FormatInt(int64(viewDiff), 2)
 		pkBitmaps[i] = bits
 		signShares[i] = AS.SignShare(secrets[i], bits, currView)
+
 	}
 
 	//fmt.Println("Make")
@@ -856,8 +856,7 @@ func makeWendyProofVotes(voteBits int, voteSet []Vote, secrets [][][]SecretKey, 
 
 	AS := AggregateSignature{}
 	currView := make([]byte, 4)
-    	binary.LittleEndian.PutUint32(currView, uint32(1000))
-
+	binary.LittleEndian.PutUint32(currView, uint32(1000))
 
 	for i := 0; i < len(voteSet); i++ {
 		viewDiff := voteSet[i].ViewNumber
@@ -877,12 +876,10 @@ func makeWendyProofVotes(voteBits int, voteSet []Vote, secrets [][][]SecretKey, 
 	return AS.Agg(signShares), pkBitmaps, currView
 }
 
-
 func verifyWendyProof(pk [][][]PublicKey, aggSig Sign, bitmaps []string, view []byte) bool {
 	AS := AggregateSignature{}
 	return AS.VerifyAgg(pk, bitmaps, view, aggSig)
 }
-
 
 func verifyAggQC(aggQC AggQC) bool {
 	msgSize := 32
@@ -897,7 +894,7 @@ func verifyAggQC(aggQC AggQC) bool {
 		block := aggQC.QCset[i].Block
 
 		id := make([]byte, 4)
-    		binary.LittleEndian.PutUint32(id, uint32(i))
+		binary.LittleEndian.PutUint32(id, uint32(i))
 
 		for j := 0; j < msgSize; j++ {
 			if j > 3 {
@@ -910,9 +907,6 @@ func verifyAggQC(aggQC AggQC) bool {
 
 	return aggQC.Sig.AggregateVerifyNoCheck(aggQC.PKs, msgVec) && highQC.Sig.FastAggregateVerify(highQC.PKs, highQC.Block)
 }
-
-
-
 
 func blsAggregateVerifyNoCheckTestOne(t *testing.T, n int) {
 	t.Logf("blsAggregateVerifyNoCheckTestOne %v\n", n)
@@ -1249,8 +1243,9 @@ func BenchmarkAggQCVerify(b *testing.B) {
 	Init(BLS12_381)
 	SetETHmode(EthModeDraft07)
 	f := 3333
+	viewDifference := 3*f + 1
 	secrets, pubs, _ := makeKeys(f)
-	qcSet := makeQCs(f, f, secrets, pubs)
+	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 	aggQC, verifyQC := makeAggQC(qcSet)
 	if !verifyQC {
 		b.Fatal("Failed verifiying QCs")
@@ -1263,12 +1258,29 @@ func BenchmarkAggQCVerify(b *testing.B) {
 	}
 }
 
+func BenchmarkAggQCProof(b *testing.B) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	f := 3333
+	viewDifference := 3*f + 1
+	secrets, pubs, _ := makeKeys(f)
+	qcSet := makeQCs(f, viewDifference, secrets, pubs)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		_, verifyQC := makeAggQC(qcSet)
+		if !verifyQC {
+			b.Fatal("Failed verification")
+		}
+	}
+}
+
 func BenchmarkWendyProofVerify(b *testing.B) {
 	b.StopTimer()
 	Init(BLS12_381)
 	SetETHmode(EthModeDraft07)
-	viewDifference := 1024
-	f := 3333
+	f := 1000
+	viewDifference := 3*f + 1
 	secrets, pubs, _ := makeKeys(f)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 
@@ -1282,13 +1294,29 @@ func BenchmarkWendyProofVerify(b *testing.B) {
 	}
 }
 
+func BenchmarkWendyProof(b *testing.B) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	f := 3333
+	viewDifference := 3*f + 1
+	secrets, pubs, _ := makeKeys(f)
+	qcSet := makeQCs(f, viewDifference, secrets, pubs)
+
+	sks, pks, _ := makeWendyKeys(f, viewDifference)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		makeWendyProof(qcSet, sks, pks)
+	}
+}
+
 func BenchmarkSBFTVerify(b *testing.B) {
 	b.StopTimer()
 	Init(BLS12_381)
 	SetETHmode(EthModeDraft07)
-	viewDifference := 1024
 	f := 3333
 	ids, secrets, mpk := makeThresholdKeys(f)
+	viewDifference := int(math.Log2(float64(3*f + 1)))
 	//makeThresholdKeys(f)
 	sks, pks, _ := makeKeys(f)
 
@@ -1301,6 +1329,48 @@ func BenchmarkSBFTVerify(b *testing.B) {
 		}*/
 
 		if !verifySBFT(qcSet, voteSet, ids, mpk, pks) {
+			b.Fatal("Failed verification")
+		}
+	}
+}
+
+func Benchmark2HSVerify(b *testing.B) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	f := 3333
+	ids, secrets, mpk := makeThresholdKeys(f)
+	viewDifference := int(math.Log2(float64(3*f + 1)))
+
+	qcSet := makeThresholdQCs(f, viewDifference, ids, secrets)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		/*if !verifyThresholdQCs(qcSet, ids, mpk) {
+			b.Fatal("Failed verification")
+		}*/
+
+		if !verify2HS(qcSet[0], ids, mpk) {
+			b.Fatal("Failed verification")
+		}
+	}
+}
+
+func Benchmark2HSProof(b *testing.B) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	f := 3333
+	ids, secrets, mpk := makeThresholdKeys(f)
+	viewDifference := int(math.Log2(float64(3*f + 1)))
+
+	qcSet := makeThresholdQCs(f, viewDifference, ids, secrets)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		/*if !verifyThresholdQCs(qcSet, ids, mpk) {
+			b.Fatal("Failed verification")
+		}*/
+
+		if !make2HSProof(qcSet, mpk) {
 			b.Fatal("Failed verification")
 		}
 	}
@@ -1333,5 +1403,3 @@ func BenchmarkWendyProofVotesVerify(b *testing.B) {
 		}
 	}
 }
-
-

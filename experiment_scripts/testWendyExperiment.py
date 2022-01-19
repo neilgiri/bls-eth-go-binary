@@ -58,8 +58,9 @@ print("Storage")
 print(wendyExperiment.calculateStorageWendy(f, view_diff_bits) / wendyExperiment.calculateStorageFastHotStuff(f))
 print(wendyExperiment.calculateStorageFastHotStuff(f))
 print(wendyExperiment.calculateStorageSBFT(f))
-print(wendyExperiment.calculateStorageCasper(f))
+print(wendyExperiment.calculateStorageTwoHotStuff(f))
 
-
+#wendyExperiment.bandwidthGraphs()
+wendyExperiment.storageGraphs()
 
 
