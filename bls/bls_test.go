@@ -9,6 +9,8 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 
+	"github.com/oasisprotocol/curve25519-voi/primitives/ed25519"
+
 	"fmt"
 	"math"
 	"math/big"
@@ -518,7 +520,7 @@ func makeMultiSig(n int) (pubs []PublicKey, sigs []Sign, msgs []byte) {
 	return pubs, sigs, msgs
 }
 
-func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey, pops []Sign) {
+func makeMultiSigKeys(f int) (secrets []SecretKey, pubs []PublicKey, pops []Sign) {
 	n := 2*f + 1
 	secrets = make([]SecretKey, n)
 	pubs = make([]PublicKey, n)
@@ -534,6 +536,23 @@ func makeKeys(f int) (secrets []SecretKey, pubs []PublicKey, pops []Sign) {
 
 	return secrets, pubs, pops
 }
+
+func genMultiSigShares(f int) (pubs []PublicKey, sigs []Sign, msg []byte) {
+	k := 2*f+1
+	pubs = make([]PublicKey, k)
+	sigs = make([]Sign, k)
+	msg = make([]byte, 32)
+	msg[0] = byte(1)
+
+	for i := 0; i < k; i++ {
+		var sec SecretKey
+		sec.SetByCSPRNG()
+		pubs[i] = *sec.GetPublicKey()
+		sigs[i] = *sec.SignByte(msg)
+	}
+	return pubs, sigs, msg
+}
+
 
 func makeThresholdKeys(f int) (identifiers []ID, secrets []SecretKey, masterPubKey PublicKey) {
 	k := 2*f + 1
@@ -557,6 +576,79 @@ func makeThresholdKeys(f int) (identifiers []ID, secrets []SecretKey, masterPubK
 	secretKey.Recover(msk, ids)
 	mpk := secretKey.GetPublicKey()
 	return ids, sks, *mpk
+}
+
+func genEDSigShares(f int) (pubKeys []ed25519.PublicKey, sigs [][]byte, msg []byte) {
+	k := 2*f+1
+	pubKeys = make([]ed25519.PublicKey, k)
+	sigs = make([][]byte, k)
+	msg = make([]byte, 32)
+	msg[0] = byte(1)
+
+	for i := 0; i < k; i++ {
+		publicKey, secretKey, _ := ed25519.GenerateKey(rand.Reader)
+		pubKeys[i] = publicKey
+		sigs[i] = ed25519.Sign(secretKey, msg)
+	}
+	return pubKeys, sigs, msg
+}
+
+func genThresholdSigShares(f int) (identifiers []ID, masterPubKey PublicKey, sigs []Sign, msg []byte) {
+	k := 2*f+1
+	n := 3*f+1
+
+	ids := make([]ID, n)
+	sks := make([]SecretKey, n)
+	sigs = make([]Sign, n)
+	msg = make([]byte, 32)
+	msg[0] = byte(1)
+
+	var secretKey SecretKey
+	secretKey.SetByCSPRNG()
+
+	msk := secretKey.GetMasterSecretKey(k)
+
+	for i := 0; i < n; i++ {
+		ids[i].SetLittleEndian([]byte{byte(i & 255), byte(i >> 8), 2, 3, 4, 5})
+
+		sks[i].Set(msk, &ids[i])
+		sigs[i] = *sks[i].SignByte(msg)
+	}
+
+	mpk := secretKey.GetPublicKey()
+	return ids[0:k], *mpk, sigs[0:k], msg
+}
+
+func genMultiSigAgg(sigs []Sign) (multiSig Sign) {
+	multiSig.Aggregate(sigs)
+	return multiSig
+}
+
+func genEDSigAgg(sigs [][]byte, pubKeys []ed25519.PublicKey, msg []byte) (batchVerifier *ed25519.BatchVerifier) {
+	batchVerifier = ed25519.NewBatchVerifierWithCapacity(len(sigs))
+
+	for i, sig := range sigs {
+		batchVerifier.Add(pubKeys[i], msg, sig)
+	}
+
+	return batchVerifier
+}
+
+func genThresholdSigAgg(identifiers []ID, sigs []Sign) (thresholdSig Sign) {
+	thresholdSig.Recover(sigs, identifiers)
+	return thresholdSig
+}
+
+func genMultiSigVerify(multiSig Sign, pubKeys []PublicKey, msg []byte) bool {
+	return multiSig.FastAggregateVerify(pubKeys, msg)
+}
+
+func genEDSigVerify(batchVerifier *ed25519.BatchVerifier) bool {
+	return batchVerifier.VerifyBatchOnly(rand.Reader)
+}
+
+func genThresholdSigVerify(thresholdSig Sign, masterPubKey PublicKey, msg []byte) bool {
+	return thresholdSig.VerifyByte(&masterPubKey, msg)
 }
 
 func makeECDASKeys(f int) (secrets []ecdsa.PrivateKey, pubs []ecdsa.PublicKey) {
@@ -1244,7 +1336,7 @@ func BenchmarkAggQCVerify(b *testing.B) {
 	SetETHmode(EthModeDraft07)
 	f := 3333
 	viewDifference := 3*f + 1
-	secrets, pubs, _ := makeKeys(f)
+	secrets, pubs, _ := makeMultiSigKeys(f)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 	aggQC, verifyQC := makeAggQC(qcSet)
 	if !verifyQC {
@@ -1264,7 +1356,7 @@ func BenchmarkAggQCProof(b *testing.B) {
 	SetETHmode(EthModeDraft07)
 	f := 3333
 	viewDifference := 3*f + 1
-	secrets, pubs, _ := makeKeys(f)
+	secrets, pubs, _ := makeMultiSigKeys(f)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
@@ -1281,7 +1373,7 @@ func BenchmarkWendyProofVerify(b *testing.B) {
 	SetETHmode(EthModeDraft07)
 	f := 1000
 	viewDifference := 3*f + 1
-	secrets, pubs, _ := makeKeys(f)
+	secrets, pubs, _ := makeMultiSigKeys(f)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 
 	sks, pks, _ := makeWendyKeys(f, viewDifference)
@@ -1300,7 +1392,7 @@ func BenchmarkWendyProof(b *testing.B) {
 	SetETHmode(EthModeDraft07)
 	f := 3333
 	viewDifference := 3*f + 1
-	secrets, pubs, _ := makeKeys(f)
+	secrets, pubs, _ := makeMultiSigKeys(f)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 
 	sks, pks, _ := makeWendyKeys(f, viewDifference)
@@ -1318,7 +1410,7 @@ func BenchmarkSBFTVerify(b *testing.B) {
 	ids, secrets, mpk := makeThresholdKeys(f)
 	viewDifference := int(math.Log2(float64(3*f + 1)))
 	//makeThresholdKeys(f)
-	sks, pks, _ := makeKeys(f)
+	sks, pks, _ := makeMultiSigKeys(f)
 
 	qcSet := makeThresholdQCs(f, viewDifference, ids, secrets)
 	voteSet := makeThresholdVotes(f, viewDifference, ids, sks)
@@ -1355,6 +1447,154 @@ func Benchmark2HSVerify(b *testing.B) {
 	}
 }
 
+func BenchmarkThresholdAgg(b *testing.B) {
+	benchmarks := []int {
+		1, 3, 10, 33, 100, 333, 1000, 3333,
+	}
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+
+	for _, bm := range benchmarks {
+		b.Run(strconv.Itoa(bm), func(b *testing.B) {
+			benchmarkThresholdAgg(b, bm)
+		},)
+	}
+}
+
+
+func benchmarkThresholdAgg(b *testing.B, f int) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	ids, _, sigs, _ := genThresholdSigShares(f)
+
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		genThresholdSigAgg(ids, sigs)
+	}
+}
+
+func BenchmarkMultiSigAgg(b *testing.B) {
+	benchmarks := []int {
+		1, 3, 10, 33, 100, 333, 1000, 3333,
+	}
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+
+	for _, bm := range benchmarks {
+		b.Run(strconv.Itoa(bm), func(b *testing.B) {
+			benchmarkMultiSigAgg(b, bm)
+		},)
+	}
+}
+
+
+func benchmarkMultiSigAgg(b *testing.B, f int) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	_, sigs, _ := genMultiSigShares(f)
+
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		genMultiSigAgg(sigs)
+	}
+}
+
+func BenchmarkThresholdVerify(b *testing.B) {
+	benchmarks := []int {
+		1, 3, 10, 33, 100, 333, 1000, 3333,
+	}
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+
+	for _, bm := range benchmarks {
+		b.Run(strconv.Itoa(bm), func(b *testing.B) {
+			benchmarkThresholdVerify(b, bm)
+		},)
+	}
+}
+
+
+func benchmarkThresholdVerify(b *testing.B, f int) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	ids, masterPubKey, sigs, msg := genThresholdSigShares(f)
+	thresholdSig := genThresholdSigAgg(ids, sigs)
+
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		if !genThresholdSigVerify(thresholdSig, masterPubKey, msg) {
+			b.Fatal("Invalid threshold signature")
+		}
+	}
+}
+
+func BenchmarkMultiSigVerify(b *testing.B) {
+	benchmarks := []int {
+		1, 3, 10, 33, 100, 333, 1000, 3333,
+	}
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+
+	for _, bm := range benchmarks {
+		b.Run(strconv.Itoa(bm), func(b *testing.B) {
+			benchmarkMultiSigVerify(b, bm)
+		},)
+	}
+}
+
+
+func benchmarkMultiSigVerify(b *testing.B, f int) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	pubKeys, sigs, msg := genMultiSigShares(f)
+	//multiSig := genMultiSigAgg(sigs)
+
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		multiSig := genMultiSigAgg(sigs)
+
+		if !genMultiSigVerify(multiSig, pubKeys, msg) {
+			b.Fatal("Invalid multi-signature")
+		}
+	}
+}
+
+func BenchmarkEDSigVerify(b *testing.B) {
+	benchmarks := []int {
+		1, 3, 10, 33, 100, 333, 1000, 3333,
+	}
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+
+	for _, bm := range benchmarks {
+		b.Run(strconv.Itoa(bm), func(b *testing.B) {
+			benchmarkEDSigVerify(b, bm)
+		},)
+	}
+}
+
+
+func benchmarkEDSigVerify(b *testing.B, f int) {
+	b.StopTimer()
+	Init(BLS12_381)
+	SetETHmode(EthModeDraft07)
+	pubKeys, sigs, msg := genEDSigShares(f)
+	//batchVerifier := genEDSigAgg(sigs, pubKeys, msg)
+
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		batchVerifier := genEDSigAgg(sigs, pubKeys, msg)
+
+		if !genEDSigVerify(batchVerifier) {
+			b.Fatal("Invalid multi-signature")
+		}
+	}
+}
+
 func Benchmark2HSProof(b *testing.B) {
 	b.StopTimer()
 	Init(BLS12_381)
@@ -1385,7 +1625,7 @@ func BenchmarkWendyProofVotesVerify(b *testing.B) {
 	viewDifference := 1024
 	f := 3333
 
-	secrets, pubs, _ := makeKeys(f)
+	secrets, pubs, _ := makeMultiSigKeys(f)
 	voteSet := makeVotes(f, viewDifference, secrets, pubs)
 	qcSet := makeQCs(f, viewDifference, secrets, pubs)
 
